@@ -1,6 +1,6 @@
 ---
 name: datablist-api-setup
-description: Set up the Datablist Enrichments API for a user and run any Datablist enrichment, on their computer or in Make, n8n or Zapier. Use when the user asks to set up, install or run the Datablist API or a Datablist enrichment.
+description: Set up the Datablist Enrichments API or Sources API for a user and run any Datablist enrichment or source, on their computer or in Make, n8n or Zapier. Use when the user asks to set up, install or run the Datablist API, a Datablist enrichment or a Datablist source.
 ---
 
 # Set up the Datablist Enrichments API
@@ -11,7 +11,9 @@ The user only does two things by hand: copy their API key from the Datablist app
 
 If the user asked for Make, n8n or Zapier, skip to "Set it up in Make, n8n or Zapier" at the end.
 
-Full API reference: https://platform.datablist.com/docs/enrichments/quickstart
+Enrichments add data to rows the user already has (a list of names, websites, profiles). Sources create new records from settings alone, without input rows: Instagram followers, companies using a technology, Google search results, the URLs of a sitemap. If the user named a source (for example the Instagram Followers Scraper, Find Companies by Technologies, Bulk Google Search or the Sitemap Scraper), or wants to build a new list rather than enrich one, do steps 1 and 2, then follow "Run a source" instead of steps 3 and 4.
+
+Full API reference: https://platform.datablist.com/docs/enrichments/quickstart (enrichments) and https://platform.datablist.com/docs/sources/quickstart (sources)
 
 ## 1. Create the Datablist folder and the .env file
 
@@ -78,11 +80,32 @@ Show a table with the input and the main outputs. Point out rows without a resul
 
 If something fails, read the error, fix what you can (key not loaded, wrong field name, missing required input) and explain the rest in plain words.
 
+## Run a source
+
+1. List the sources. This needs no key: `curl https://api.datablist.com/v1/sources`. Fetch the chosen one: `curl https://api.datablist.com/v1/sources/SOURCE_ID`. It lists the settings (`settingsSchema`, with allowed values), the outputs and the cost. There is no input schema.
+2. Ask the user for the settings in plain words (which profiles, which technology and country, which searches, which sitemap) and turn them into the JSON the schema expects. Lists such as profiles or search queries are JSON arrays, one element per item. Tell them the run uses credits and give an estimate from the cost before you start.
+3. Create a task: `POST /v1/sources/tasks` with
+
+   ```json
+   {
+     "sourceId": "SOURCE_ID",
+     "uniqueId": "a-new-unique-id-per-run",
+     "settings": { }
+   }
+   ```
+
+   The answer is `202 Accepted` with the task `@id`. Add `"maxCredits": "500"` (a string) for a best-effort credit budget if the user wants one.
+4. Wait: call `GET /v1/sources/tasks/{taskId}` every few seconds until the status is `completed`, `failed` or `stopped`. Failed and stopped tasks can still have results.
+5. Read the results: `GET /v1/sources/tasks/{taskId}/results?limit=100`, following `nextCursor` until it is null. Each result is one flat JSON object with the output fields, not wrapped in `inputId` or `outputs`. The task shows `credits.used`.
+6. Save the results as a CSV in `~/Datablist` and show the first rows in a table, with the full path of the file.
+
+Do not resend the same POST after a timeout: look up the uniqueId in `GET /v1/sources/tasks` first. Sources and enrichments share about 20 active tasks per account.
+
 ## Set it up in Make, n8n or Zapier
 
 The user wants an automation, not a script on their computer. Guide them step by step and tell them exactly what to put in every field.
 
 1. Ask them to store their API key from https://app.datablist.com/account/api in the tool's credentials (a Make connection, an n8n Header Auth credential, or the Zap's connection settings) as the header `X-API-Key`. Never ask for the key in the chat.
-2. Ask which enrichment they need and which of their fields to send. List the enrichments from `https://api.datablist.com/v1/enrichments` and read the schema of the chosen one as in step 3 above.
-3. Build three HTTP steps: create the task (`POST https://api.datablist.com/v1/enrichments/tasks` with the JSON body from step 4), wait and check the task until it is `completed`, then read the results (`GET .../results?limit=100`).
-4. Map each result's `outputs` to their sheet, CRM or next step, matched by `inputId`.
+2. Ask which enrichment or source they need. For an enrichment, ask which of their fields to send, list the enrichments from `https://api.datablist.com/v1/enrichments` and read the schema as in step 3 above. For a source, list `https://api.datablist.com/v1/sources` and read the settings as in "Run a source".
+3. Build three HTTP steps: create the task (`POST https://api.datablist.com/v1/enrichments/tasks` with the JSON body from step 4, or `POST https://api.datablist.com/v1/sources/tasks` with the body from "Run a source"), wait and check the task until it is `completed`, then read the results (`GET .../results?limit=100`).
+4. Map each result's `outputs` to their sheet, CRM or next step, matched by `inputId`. Source results have no `inputId`: map each result object to a new row.
